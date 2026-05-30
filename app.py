@@ -3,16 +3,21 @@ import json
 from flask import Flask, render_template, redirect, url_for, session, request
 from flask_socketio import SocketIO, emit
 from authlib.integrations.flask_client import OAuth
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'clave_secreta_pizarron_2026'
+
+# --- CONFIGURACIÓN DE PROXY PARA PRODUCCIÓN (HTTPS DETRÁS DE CLOUDFLARE) ---
+# Esto corrige el "MismatchingStateError" sincronizando las cabeceras SSL de Cloudflare
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # --- CONFIGURACION OAUTH (GOOGLE) ---
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
     client_id='674895961793-00s62uii12cldr9t4hpf47ooreq6o1tg.apps.googleusercontent.com',
-    client_secret='sexo',
+    client_secret='sexo',  # <-- CORRIGE AQUÍ: Pega tu Client Secret real de la consola de Google Cloud
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={'scope': 'openid email profile'}
 )
@@ -48,6 +53,7 @@ def authorize():
     user_info = resp.json()
     correo = user_info['email']
 
+    # Condición corregida con tu correo personal de producción
     if correo.endswith(DOMINIO_AUTORIZADO) or correo == "ortizangelomar2726@gmail.com":
         session['user'] = user_info
         return redirect('/')
@@ -123,4 +129,5 @@ def handle_clear_board(data):
         emit('admin_error', {'message': 'Contrasena incorrecta'})
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, port=5000)    
+    # Configurado host '0.0.0.0' para que escuche hacia el túnel de Cloudflare de forma global
+    socketio.run(app, host='0.0.0.0', port=5000)
