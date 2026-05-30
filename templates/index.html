@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pizarron Universitario</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    
+    <style>
+        body, html { font-family: sans-serif; margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #ffffff; }
+        .canvas-container { margin: 0; padding: 0; }
+
+        #menuToggle { 
+            position: absolute; 
+            top: 15px; 
+            left: 15px; 
+            z-index: 100; 
+            background: rgba(51, 51, 51, 0.8); 
+            color: white; 
+            border: none; 
+            width: 45px;
+            height: 45px;
+            font-size: 20px; 
+            cursor: pointer; 
+            border-radius: 50%; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background 0.2s, transform 0.2s;
+        }
+        #menuToggle:hover {
+            background: rgba(51, 51, 51, 1);
+            transform: scale(1.05);
+        }
+
+        #sidebar { 
+            position: absolute; top: 0; left: -300px; width: 280px; height: 100%; 
+            background: #f4f4f9; z-index: 99; transition: left 0.3s ease; 
+            padding-top: 80px; box-shadow: 2px 0 10px rgba(0,0,0,0.2); box-sizing: border-box;
+            overflow-y: auto;
+        }
+        #sidebar.active { left: 0; }
+
+        .tool-group { padding: 15px 20px; border-bottom: 1px solid #ddd; }
+        .tool-group label { display: block; font-weight: bold; margin-bottom: 8px; font-size: 14px;}
+        .tool-group select, .tool-group input, .tool-group button { 
+            width: 100%; padding: 10px; margin-bottom: 5px; border-radius: 5px; 
+            border: 1px solid #ccc; box-sizing: border-box; cursor: pointer;
+        }
+
+        #welcomeModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 200; display: flex; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 30px; border-radius: 10px; max-width: 450px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+        .modal-content h2 { margin-top: 0; color: #333; }
+        .modal-content ul { text-align: left; margin-bottom: 25px; line-height: 1.6; }
+        .btn-primary { background: #4285F4; color: white; border: none; font-weight: bold; font-size: 16px; padding: 10px 20px; cursor: pointer; border-radius: 5px;}
+        
+        #reportBtn { background-color: #ff9800; color: white; border: none; font-weight: bold; display: none; margin-top: 8px; }
+        #adminPanel { background-color: #ffe6e6; border-left: 5px solid red;}
+        .admin-btn { background-color: #d32f2f; color: white; border: none; font-weight: bold; margin-top: 5px;}
+
+        /* Estilos para la paleta de colores sencillos */
+        .color-palette {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .palette-circle {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+            transition: transform 0.1s;
+        }
+        .palette-circle:hover {
+            transform: scale(1.1);
+        }
+    </style>
+</head>
+<body data-is-admin="{{ 'true' if is_admin else 'false' }}">
+
+    <div id="welcomeModal">
+        <div class="modal-content">
+            <h2>Bienvenido, {{ usuario }}</h2>
+            <p>Este es el pizarron oficial de la universidad.</p>
+            <ul>
+                <li>Manten el respeto hacia tus companeros.</li>
+                <li>Si ves algo inapropiado, usa la herramienta de Seleccionar y presiona Reportar.</li>
+                <li>Usa el boton superior izquierdo para abrir tus herramientas.</li>
+            </ul>
+            <button class="btn-primary" onclick="cerrarModal()">Entendido, a dibujar</button>
+        </div>
+    </div>
+
+    <button id="menuToggle">☰</button>
+    
+    <div id="sidebar">
+        <div class="tool-group">
+            <p id="status" style="margin:0; font-weight: bold;">Conectando...</p>
+        </div>
+
+        <div class="tool-group">
+            <label>Modo de interaccion:</label>
+            <select id="modeSelect">
+                <option value="draw">Dibujar</option>
+                <option value="select">Seleccionar</option>
+                <option value="pan">Navegar (Mover lienzo)</option>
+            </select>
+            <button id="reportBtn">Reportar Dibujo Seleccionado</button>
+        </div>
+
+        <div class="tool-group">
+            <label>Estilo de trazo:</label>
+            <select id="brushType">
+                <option value="pencil">Pincel Normal</option>
+                <option value="marker">Plumon</option>
+                <option value="spray">Graffiti (Spray)</option>
+                <option value="eraser">Goma de borrar</option>
+            </select>
+        </div>
+
+        <div class="tool-group">
+            <label>Color rápido:</label>
+            <div class="color-palette">
+                <div class="palette-circle" style="background-color: #000000;" data-color="#000000"></div>
+                <div class="palette-circle" style="background-color: #d32f2f;" data-color="#d32f2f"></div>
+                <div class="palette-circle" style="background-color: #1976d2;" data-color="#1976d2"></div>
+                <div class="palette-circle" style="background-color: #388e3c;" data-color="#388e3c"></div>
+                <div class="palette-circle" style="background-color: #fbc02d;" data-color="#fbc02d"></div>
+                <div class="palette-circle" style="background-color: #7b1fa2;" data-color="#7b1fa2"></div>
+            </div>
+            <label>Color personalizado (Hex):</label>
+            <input type="color" id="colorPicker" value="#000000">
+            
+            <label style="margin-top: 10px;">Opacidad:</label>
+            <input type="range" id="opacitySlider" min="0.05" max="1" step="0.05" value="1">
+        </div>
+
+        <div class="tool-group">
+            <button id="clearBtn">Limpiar mi pantalla (Local)</button>
+        </div>
+
+        {% if is_admin %}
+        <div class="tool-group" id="adminPanel">
+            <label style="color: red;">Panel de Control Admin</label>
+            <button class="admin-btn" id="adminDeleteSelectedBtn">Borrar Seleccionado (Global)</button>
+            <button class="admin-btn" id="adminClearBtn">Borrar TODO (Global)</button>
+        </div>
+        {% endif %}
+    </div>
+
+    <canvas id="pizarron"></canvas>
+
+    <script>
+        function cerrarModal() { document.getElementById('welcomeModal').style.display = 'none'; }
+        document.getElementById('menuToggle').addEventListener('click', function() {
+            document.getElementById('sidebar').classList.toggle('active');
+        });
+
+        const socket = io();
+        socket.on('connect', () => {
+            const status = document.getElementById('status');
+            status.innerText = "Estado: Conectado";
+            status.style.color = "green";
+        });
+
+        const canvas = new fabric.Canvas('pizarron', {
+            isDrawingMode: true,
+            width: window.innerWidth,
+            height: window.innerHeight,
+            backgroundColor: '#ffffff',
+            selection: true
+        });
+
+        window.addEventListener('resize', function() {
+            canvas.setWidth(window.innerWidth);
+            canvas.setHeight(window.innerHeight);
+            canvas.renderAll();
+        });
+
+        // Configuración de Pinceles
+        const brushes = {
+            pencil: new fabric.PencilBrush(canvas),
+            marker: new fabric.PencilBrush(canvas), 
+            spray: new fabric.SprayBrush(canvas)
+        };
+
+        brushes.pencil.width = 5;
+        brushes.marker.width = 25; 
+        brushes.spray.width = 40;
+        brushes.spray.density = 100; 
+        brushes.spray.dotWidth = 3;  
+        brushes.spray.dotWidthVariance = 2; 
+
+        let baseColorHex = '#000000';
+        let currentOpacity = 1;
+
+        function updateBrushColor() {
+            const currentBrush = document.getElementById('brushType').value;
+            if (currentBrush === 'eraser') return; 
+
+            let r = parseInt(baseColorHex.slice(1, 3), 16);
+            let g = parseInt(baseColorHex.slice(3, 5), 16);
+            let b = parseInt(baseColorHex.slice(5, 7), 16);
+            canvas.freeDrawingBrush.color = `rgba(${r}, ${g}, ${b}, ${currentOpacity})`;
+        }
+
+        canvas.freeDrawingBrush = brushes.pencil;
+        updateBrushColor();
+
+        // Controladores de la paleta de colores rapidos
+        document.querySelectorAll('.palette-circle').forEach(circle => {
+            circle.addEventListener('click', function() {
+                baseColorHex = this.getAttribute('data-color');
+                document.getElementById('colorPicker').value = baseColorHex;
+                updateBrushColor();
+            });
+        });
+
+        document.getElementById('colorPicker').addEventListener('change', function(e) {
+            baseColorHex = e.target.value;
+            updateBrushColor();
+        });
+
+        document.getElementById('opacitySlider').addEventListener('input', function(e) {
+            currentOpacity = e.target.value;
+            updateBrushColor();
+        });
+
+        document.getElementById('brushType').addEventListener('change', function(e) {
+            const type = e.target.value;
+            if (type === 'eraser') {
+                canvas.freeDrawingBrush = brushes.pencil;
+                canvas.freeDrawingBrush.color = '#ffffff';
+                canvas.freeDrawingBrush.width = 25;
+            } else {
+                canvas.freeDrawingBrush = brushes[type];
+                updateBrushColor();
+                if (type === 'pencil') canvas.freeDrawingBrush.width = 5;
+                if (type === 'marker') canvas.freeDrawingBrush.width = 15;
+                if (type === 'spray') canvas.freeDrawingBrush.width = 30;
+            }
+        });
+
+        // Manejo de Modos (Dibujar, Seleccionar, Mover)
+        document.getElementById('modeSelect').addEventListener('change', function(e) {
+            const mode = e.target.value;
+            if (mode === 'draw') {
+                canvas.isDrawingMode = true;
+                canvas.selection = true;
+                canvas.discardActiveObject();
+                canvas.renderAll();
+                document.getElementById('reportBtn').style.display = 'none';
+            } else if (mode === 'select') {
+                canvas.isDrawingMode = false;
+                canvas.selection = true;
+            } else if (mode === 'pan') {
+                canvas.isDrawingMode = false;
+                canvas.selection = false; // Desactiva seleccionar objetos al arrastrar
+                canvas.discardActiveObject();
+                canvas.renderAll();
+                document.getElementById('reportBtn').style.display = 'none';
+            }
+        });
+
+        // --- MOTOR DE NAVEGACION (PAN Y ZOOM) ---
+        let isDragging = false;
+        let lastPosX, lastPosY;
+
+        canvas.on('mouse:down', function(opt) {
+            const mode = document.getElementById('modeSelect').value;
+            const evt = opt.e;
+            if (mode === 'pan') {
+                isDragging = true;
+                lastPosX = evt.clientX || (evt.touches && evt.touches[0] ? evt.touches[0].clientX : 0);
+                lastPosY = evt.clientY || (evt.touches && evt.touches[0] ? evt.touches[0].clientY : 0);
+            }
+        });
+
+        canvas.on('mouse:move', function(opt) {
+            if (!isDragging) return;
+            const evt = opt.e;
+            const vpt = canvas.viewportTransform.slice();
+            
+            const clientX = evt.clientX || (evt.touches && evt.touches[0] ? evt.touches[0].clientX : lastPosX);
+            const clientY = evt.clientY || (evt.touches && evt.touches[0] ? evt.touches[0].clientY : lastPosY);
+            
+            vpt[4] += clientX - lastPosX;
+            vpt[5] += clientY - lastPosY;
+            
+            canvas.setViewportTransform(vpt);
+            canvas.requestRenderAll();
+            
+            lastPosX = clientX;
+            lastPosY = clientY;
+        });
+
+        canvas.on('mouse:up', function() {
+            isDragging = false;
+        });
+
+        // Control del zoom con la rueda del mouse
+        canvas.on('mouse:wheel', function(opt) {
+            const delta = opt.e.deltaY;
+            let zoom = canvas.getZoom();
+            zoom *= 0.999 ** delta;
+            if (zoom > 20) zoom = 20;
+            if (zoom < 0.1) zoom = 0.1;
+            canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+            opt.e.preventDefault();
+            opt.e.stopPropagation();
+        });
+
+        // --- MEMORIA PERSISTENTE DE SELECCION (SOPORTE PARA BUG) ---
+        let lastActiveObject = null;
+
+        canvas.on('selection:created', function(e) {
+            lastActiveObject = e.selected[0];
+            if (document.getElementById('modeSelect').value === 'select') {
+                document.getElementById('reportBtn').style.display = 'block';
+            }
+        });
+
+        canvas.on('selection:updated', function(e) {
+            lastActiveObject = e.selected[0];
+            if (document.getElementById('modeSelect').value === 'select') {
+                document.getElementById('reportBtn').style.display = 'block';
+            }
+        });
+
+        canvas.on('selection:cleared', function() {
+            // No limpiamos la variable de inmediato para permitir que los botones la lean antes de perder el foco
+            document.getElementById('reportBtn').style.display = 'none';
+        });
+
+        function generateId() { return Math.random().toString(36).substr(2, 9); }
+
+        canvas.on('path:created', function(e) {
+            e.path.id = generateId(); 
+            const pathData = e.path.toJSON(['id']); 
+            socket.emit('draw_line', pathData);
+        });
+
+        document.getElementById('reportBtn').addEventListener('click', function() {
+            if (lastActiveObject && lastActiveObject.id) {
+                socket.emit('report_object', { id: lastActiveObject.id });
+                alert("Gracias. El administrador ha sido notificado.");
+                canvas.discardActiveObject();
+                canvas.renderAll();
+                lastActiveObject = null;
+            } else {
+                alert("Primero haz clic en el dibujo que deseas reportar.");
+            }
+        });
+
+        document.getElementById('clearBtn').addEventListener('click', function() {
+            canvas.clear();
+            canvas.backgroundColor = '#ffffff';
+            canvas.renderAll();
+            lastActiveObject = null;
+        });
+
+        const adminClearBtn = document.getElementById('adminClearBtn');
+        const adminDeleteSelectedBtn = document.getElementById('adminDeleteSelectedBtn');
+
+        if (adminClearBtn) {
+            adminClearBtn.addEventListener('click', function() {
+                const password = prompt("Clave maestra requerida para vaciar la base de datos:");
+                if (password) socket.emit('clear_board', { password: password });
+            });
+        }
+
+        if (adminDeleteSelectedBtn) {
+            adminDeleteSelectedBtn.addEventListener('click', function() {
+                if (lastActiveObject && lastActiveObject.id) {
+                    socket.emit('delete_object', { id: lastActiveObject.id });
+                    canvas.remove(lastActiveObject);
+                    canvas.discardActiveObject().renderAll();
+                    lastActiveObject = null;
+                } else {
+                    alert("Selecciona un trazo primero.");
+                }
+            });
+        }
+
+        // --- Eventos de Red ---
+        socket.on('draw_line', function(data) {
+            fabric.util.enlivenObjects([data], function(objects) {
+                objects.forEach(function(obj) { canvas.add(obj); });
+                canvas.renderAll();
+            });
+        });
+
+        socket.on('cargar_historial', function(historial) {
+            if (historial.length > 0) {
+                fabric.util.enlivenObjects(historial, function(objects) {
+                    objects.forEach(function(obj) { canvas.add(obj); });
+                    canvas.renderAll();
+                });
+            }
+        });
+
+        socket.on('object_deleted', function(data) {
+            canvas.getObjects().forEach(function(obj) {
+                if (obj.id === data.id) canvas.remove(obj);
+            });
+            canvas.renderAll();
+        });
+
+        socket.on('board_cleared', function() {
+            canvas.clear();
+            canvas.backgroundColor = '#ffffff';
+            canvas.renderAll();
+            lastActiveObject = null;
+        });
+
+        socket.on('admin_error', function(data) { alert(data.message); });
+
+        const isAdmin = document.body.dataset.isAdmin === 'true';
+
+        if (isAdmin) {
+            socket.on('notify_admin_report', function(data) {
+                alert("ALERTA ADMIN: Un usuario acaba de reportar un dibujo. Revisa el lienzo.");
+                canvas.getObjects().forEach(function(obj) {
+                    if (obj.id === data.id) {
+                        obj.set('opacity', 0.5); 
+                        canvas.renderAll();
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html>
