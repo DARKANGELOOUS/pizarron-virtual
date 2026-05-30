@@ -48,7 +48,7 @@ def authorize():
     user_info = resp.json()
     correo = user_info['email']
 
-    if correo.endswith(DOMINIO_AUTORIZADO) or correo == "tu_correo_personal_de_prueba@gmail.com":
+    if correo.endswith(DOMINIO_AUTORIZADO) or correo == "ortizangelomar2726@gmail.com":
         session['user'] = user_info
         return redirect('/')
     else:
